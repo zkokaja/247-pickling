@@ -12,7 +12,10 @@ import torch.nn.functional as F
 import torch.utils.data as data
 from transformers import (BartForConditionalGeneration, BartTokenizer,
                           BertForMaskedLM, BertTokenizer, GPT2LMHeadModel,
-                          GPT2Tokenizer, RobertaForMaskedLM, RobertaTokenizer)
+                          GPT2Tokenizer, RobertaForMaskedLM, RobertaTokenizer,
+                          BlenderbotSmallTokenizer, BlenderbotTokenizer,
+                          BlenderbotSmallForConditionalGeneration,
+                          BlenderbotForConditionalGeneration)
 from .utils import create_folds, lcs, main_timer
 
 
@@ -69,6 +72,9 @@ def check_token_is_root(args, df):
             args.tokenizer.convert_tokens_to_string).str.strip()
     elif args.embedding_type == 'bert':
         df['bert_token_is_root'] = df['word'] == df['token']
+    elif 'blenderbot' in args.embedding_type:
+        df['bbot_token_is_root'] = df['word'] == df['token'].apply(
+            args.tokenizer.convert_tokens_to_string).str.strip()
     else:
         raise Exception("embedding type doesn't exist")
 
@@ -98,6 +104,7 @@ def tokenize_and_explode(args, df):
     df = df.explode('token', ignore_index=True)
     df['token2word'] = df['token'].apply(
         args.tokenizer.convert_tokens_to_string).str.strip().str.lower()
+    # df = remove_punctuation(df)
     df = convert_token_to_idx(df, args.tokenizer)
     df = check_token_is_root(args, df)
     df = add_glove_embeddings(df, dim=50)
@@ -161,15 +168,16 @@ def process_extracted_logits(args, concat_logits, sentence_token_ids):
     # (batch_size, max_len, vocab_size)
 
     # concatenate all batches
-    prediction_scores = torch.cat(concat_logits, axis=0)
+    prediction_scores = torch.cat(concat_logits, axis=1).squeeze()
+    true_y = torch.tensor(sentence_token_ids).unsqueeze(-1)
 
-    if prediction_scores.shape[0] == 0:
-        return [None], [None], [None]
-    elif prediction_scores.shape[0] == 1:
-        true_y = torch.tensor(sentence_token_ids[0][1:]).unsqueeze(-1)
-    else:
-        sti = torch.tensor(sentence_token_ids)
-        true_y = torch.cat([sti[0, 1:], sti[1:, -1]]).unsqueeze(-1)
+    # if prediction_scores.shape[0] == 0:
+    #     return [None], [None], [None]
+    # elif prediction_scores.shape[0] == 1:
+    #     true_y = torch.tensor(sentence_token_ids[0][1:]).unsqueeze(-1)
+    # else:
+    #     sti = torch.tensor(sentence_token_ids)
+    #     true_y = torch.cat([sti[0, 1:], sti[1:, -1]]).unsqueeze(-1)
 
     prediction_probabilities = F.softmax(prediction_scores, dim=1)
 
@@ -182,7 +190,7 @@ def process_extracted_logits(args, concat_logits, sentence_token_ids):
     predicted_tokens = args.tokenizer.convert_ids_to_tokens(
         top1_probabilities_idx)
     predicted_words = [
-        args.tokenizer.convert_tokens_to_string(token)
+        args.tokenizer.convert_tokens_to_string([token])
         for token in predicted_tokens
     ]
 
@@ -193,7 +201,7 @@ def process_extracted_logits(args, concat_logits, sentence_token_ids):
     # probability of correct word
     true_y_probability = [None] + prediction_probabilities.gather(
         1, true_y).squeeze(-1).tolist()
-    #TODO: probabilities of all words
+    # TODO: probabilities of all words
 
     return top1_words, top1_probabilities, true_y_probability, entropy
 
@@ -210,29 +218,50 @@ def extract_select_vectors(batch_idx, array):
     return x
 
 
-def model_forward_pass(args, data_dl):
+def model_forward_pass(args, data_dl, hidden_states_kw='hidden_states'):
     model = args.model
     device = args.device
+    # tokenizer = args.tokenizer
 
     with torch.no_grad():
         model = model.to(device)
         model.eval()
 
+        accuracy, count = 0, 0
+
         all_embeddings = []
         all_logits = []
         for batch_idx, batch in enumerate(data_dl):
-            batch = batch.to(args.device)
-            model_output = model(batch)
+            # batch = batch.to(args.device)
+            input_ids = torch.LongTensor(batch['encoder_ids']).to(device)
+            decoder_ids = torch.LongTensor(batch['decoder_ids']).to(device)
+            model_output = model(input_ids.unsqueeze(0),
+                                 decoder_input_ids=decoder_ids.unsqueeze(0))
 
-            embeddings = model_output.hidden_states[-1].cpu()
-            logits = model_output.logits.cpu()
+            embeddings = model_output[hidden_states_kw][-1].cpu()[:, :-1, :]
+            logits = model_output.logits.cpu()[:, :-1, :]
 
-            embeddings = extract_select_vectors(batch_idx, embeddings)
-            logits = extract_select_vectors(batch_idx, logits)
+            predictions = model_output.logits.cpu().numpy().argmax(axis=-1)
+            y_true = decoder_ids[1:].cpu().numpy()
+            y_pred = predictions[0, :-1]
+            accuracy += np.sum(y_true == y_pred)
+            count += y_pred.size
+
+            # Uncomment to debug
+            # if batch_idx == 23 or batch_idx == 49:
+            #     print(tokenizer.decode(batch['encoder_ids']))
+            #     print(tokenizer.convert_ids_to_tokens(batch['decoder_ids'][1:]))
+            #     print(tokenizer.convert_ids_to_tokens(logits.argmax(dim=-1).squeeze().tolist()))
+            #     print()
+            #     breakpoint()
+
+            # embeddings = extract_select_vectors(batch_idx, embeddings)
+            # logits = extract_select_vectors(batch_idx, logits)
 
             all_embeddings.append(embeddings)
             all_logits.append(logits)
 
+    print('model_forward accuracy', accuracy / count)
     return all_embeddings, all_logits
 
 
@@ -268,10 +297,129 @@ def make_dataloader_from_input(windows):
     return data_dl
 
 
+def make_conversational_input(args, df):
+    '''
+    Create a conversational context/response pair to be fed into an encoder
+    decoder transformer architecture. The context is a seires of utterances
+    that precede a new utterance response.
+    '''
+
+    examples = []
+    utterances = [row.iloc[-1].sentence for _, row in df.groupby('sentence_idx')]
+    # convo = args.tokenizer(list(utterances))['input_ids']
+
+    bos = args.tokenizer.bos_token_id
+    eos = args.tokenizer.eos_token_id
+    sep = args.tokenizer.sep_token_id
+
+    sep_id = [sep] if sep is not None else [eos]
+    bos_id = [bos] if bos is not None else [sep]
+    convo = [bos_id + row.token_id.values.tolist() + sep_id for _, row in df.groupby('sentence_idx')]
+    # convo_special = []
+    # for conv in convo:
+    #   convo_special.append(bos_id + conv + sep_id)
+    # convo = convo_special
+
+    def create_context(conv, last_position, max_tokens=128):
+        ctx = []
+        for p in range(last_position, 0, -1):
+            if len(ctx) + len(conv[p]) > max_tokens:
+                break
+            ctx = conv[p] + ctx
+        return ctx
+
+    for j, response in enumerate(convo):
+        # Skip first n responses b/c of little context?
+        if j == 0:
+            continue
+
+        # Add
+        context = create_context(convo, j-1)
+        if len(context) > 0:
+            examples.append({
+                'encoder_ids': context,
+                'decoder_ids': response[:-1]
+                })
+
+    return examples
+
+
+def printe(example, args):
+    tokenizer = args.tokenizer
+    print(tokenizer.decode(example['encoder_ids']))
+    print(tokenizer.convert_ids_to_tokens(example['decoder_ids']))
+    print()
+
+
+# Recently changed that increased accuracy to expected value:
+#  - using small blenderbot
+#  - include punctuation
+def generate_conversational_embeddings(args, df):
+    df = tokenize_and_explode(args, df)
+
+    final_embeddings = []
+    final_top1_word = []
+    final_top1_prob = []
+    final_true_y_prob = []
+    for conversation in df.conversation_id.unique():
+        # token_list = get_conversation_tokens(df, conversation)
+        # model_input = make_input_from_tokens(args, token_list)
+        # input_dl = make_dataloader_from_input(model_input)
+        # input_dl = data.DataLoader(examples, batch_size=2, shuffle=False)
+        df_convo = df[df.conversation_id == conversation]
+        examples = make_conversational_input(args, df_convo)
+        # print(sum([len(e['decoder_ids']) for e in examples]))
+        input_dl = examples
+        embeddings, logits = model_forward_pass(args, input_dl,
+                                                hidden_states_kw='decoder_hidden_states')
+
+        # embeddings = process_extracted_embeddings(embeddings)
+        # assert embeddings.shape[0] == len(token_list)
+
+        # NOTE - temporary hack.
+        diff = len(df) - sum(e.shape[1] for e in embeddings)
+        emb_dim = embeddings[0].shape[-1]
+        other = [torch.full((1, diff, emb_dim), float('nan'))]
+        embeddings = other + embeddings
+
+        embeddings = torch.cat(embeddings, dim=1).numpy().squeeze()
+        final_embeddings.append(embeddings)
+        # assert len(embeddings) == len(df_convo)
+
+        y_true = np.concatenate([e['decoder_ids'][1:] for e in input_dl])
+        top1_word, top1_prob, true_y_prob, entropy = process_extracted_logits(
+            args, logits, y_true)
+
+        # NOTE - temporary hack
+        y_pres = [None]*(diff - 1)
+        final_top1_word.extend(y_pres)
+        final_top1_prob.extend(y_pres)
+        final_true_y_prob.extend(y_pres)
+
+        final_top1_word.extend(top1_word)
+        final_top1_prob.extend(top1_prob)
+        final_true_y_prob.extend(true_y_prob)
+
+    print(len(final_top1_word), embeddings.shape, df.shape)
+    df['embeddings'] = np.concatenate(final_embeddings, axis=0).tolist()
+    df['top1_pred'] = final_top1_word
+    df['top1_pred_prob'] = final_top1_prob
+    df['true_pred_prob'] = final_true_y_prob
+    df['surprise'] = -df['true_pred_prob'] * np.log2(df['true_pred_prob'])
+    # df['entropy'] = entropy  # wth
+
+    print('ZZ2 Accuracy', (df.token == df.top1_pred).mean())
+
+    save_pickle(df.to_dict('records'), args.output_file)
+
+    return df
+
+
 def generate_embeddings_with_context(args, df):
     df = tokenize_and_explode(args, df)
+    # df[['word', 'token', 'gpt2-xl_token_is_root']].to_csv('new_df.csv')
     if args.embedding_type == 'gpt2-xl':
-        args.tokenizer.pad_token = args.tokenizer.eos_token
+        args.tokenizer.pad_token = args.tokenizer.bos_token
 
     final_embeddings = []
     final_top1_word = []
@@ -290,7 +438,7 @@ def generate_embeddings_with_context(args, df):
         final_embeddings.append(embeddings)
 
         top1_word, top1_prob, true_y_prob, entropy = process_extracted_logits(
-            args, logits, model_input)
+            args, logits, y_true)
         final_top1_word.extend(top1_word)
         final_top1_prob.extend(top1_prob)
         final_true_y_prob.extend(true_y_prob)
@@ -413,21 +561,31 @@ def select_tokenizer_and_model(args):
         tokenizer_class = BartTokenizer
         model_class = BartForConditionalGeneration
         model_name = 'bart'
+    elif args.embedding_type == 'blenderbot-small':
+        tokenizer_class = BlenderbotSmallTokenizer
+        model_class = BlenderbotSmallForConditionalGeneration
+        model_name = 'facebook/blenderbot_small-90M'
+    elif args.embedding_type == 'blenderbot':
+        tokenizer_class = BlenderbotTokenizer
+        model_class = BlenderbotForConditionalGeneration
+        model_name = 'facebook/blenderbot-400M-distill'  # NOTE
+        model_name = 'facebook/blenderbot-3B'  # NOTE
     elif args.embedding_type == 'glove50':
         return
     else:
         print('No model found for', args.model_name)
         exit(1)
 
+    # CACHE_DIR = None
     CACHE_DIR = os.path.join(os.path.dirname(os.getcwd()), '.cache')
     os.makedirs(CACHE_DIR, exist_ok=True)
 
-    args.model = model_class.from_pretrained(model_name,
-                                             output_hidden_states=True,
-                                             cache_dir=CACHE_DIR)
+    # TODO add_prefix_space=True,
     args.tokenizer = tokenizer_class.from_pretrained(model_name,
-                                                     add_prefix_space=True,
                                                      cache_dir=CACHE_DIR)
+    args.model = model_class.from_pretrained(model_name,
+                                             cache_dir=CACHE_DIR,
+                                             output_hidden_states=True)
 
     if args.history and args.context_length <= 0:
         args.context_length = args.tokenizer.max_len_single_sentence
@@ -452,6 +610,7 @@ def parse_arguments():
                         default=False)
     parser.add_argument('--subject', type=str, default='625')
     parser.add_argument('--history', action='store_true', default=False)
+    parser.add_argument('--conversational', action='store_true', default=False)
     parser.add_argument('--conversation-id', type=int, default=0)
     parser.add_argument('--pkl-identifier', type=str, default=None)
     parser.add_argument('--project-id', type=str, default=None)
@@ -533,10 +692,11 @@ def main():
     args = parse_arguments()
     select_tokenizer_and_model(args)
     setup_environ(args)
+    print(args.output_file, args.pickle_name)
 
     if args.project_id == 'tfs':
         utterance_df = load_pickle(args)
-        utterance_df = select_conversation(args, utterance_df)
+        utterance_df = select_conversation(args, utterance_df)  # was commented
     elif args.project_id == 'podcast':
         utterance_df = tokenize_podcast_transcript(args)
     else:
@@ -547,6 +707,8 @@ def main():
             df = generate_embeddings_with_context(args, utterance_df)
         else:
             print('TODO: Generate embeddings for this model with context')
+    elif args.conversational:
+        generate_conversational_embeddings(args, utterance_df)
     else:
         if args.embedding_type == 'glove50':
             df = generate_glove_embeddings(args, utterance_df)

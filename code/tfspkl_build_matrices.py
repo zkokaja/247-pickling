@@ -118,6 +118,7 @@ def process_data_for_pickles(CONFIG, subject=None, electrode_labels=None):
     for conversation in conversations:
         try:  # Check if files exists
             datum_fn = glob.glob(conversation + suffix)[0]
+            print(f'Reading datum file {datum_fn}')
         except IndexError:
             print('File DNE: ', conversation + suffix)
             continue

@@ -52,6 +52,7 @@ def parse_arguments():
     parser.add_argument('--verbose', action='store_true', default=False)
     parser.add_argument('--subject', type=str, default='625')
     parser.add_argument('--history', action='store_true', default=False)
+    parser.add_argument('--conversational', action='store_true', default=False)
     parser.add_argument('--conversation-id', type=int, default=0)
     parser.add_argument('--pkl-identifier', type=str, default=None)
     parser.add_argument('--project-id', type=str, default=None)

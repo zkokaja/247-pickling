@@ -39,8 +39,7 @@ endif
 %-pickle: SID_LIST=661 662 717 723 741 742 743 763 798
 # {625 676 | 661 662 717 723 741 742 743 763 798 | 777}
 %-pickle: MEL := 500
-# Setting a large number will extract all common \
-									electrodes across all conversations
+# Setting a large number will extract all common electrodes across all conversations
 %-pickle: MINF := 0
 
 create-pickle:
@@ -70,10 +69,13 @@ upload-pickle:
 
 # download pickles from google cloud bucket
 download-247-pickles:
-	mkdir -p results/{625,676}
-	gsutil -m rsync -x "^(?!.*625).*" gs://247-podcast-data/247_pickles/ results/625/
-	gsutil -m rsync -x "^(?!.*676).*" gs://247-podcast-data/247_pickles/ results/676/
+	mkdir -p results/tfs/{625,676}/pickles
+	gsutil -m rsync gs://247-podcast-data/tfs_pickles/625 results/tfs/625/pickles/
+	gsutil -m rsync gs://247-podcast-data/tfs_pickles/676 results/tfs/676/pickles/
 
+download-pod-pickles:
+	mkdir -p results/podcast/777/pickles
+	gsutil -m rsync gs://247-podcast-data/podcast_pickles/777/ results/podcast/777/pickles/
 
 ## settings for targets: generate-embeddings, concatenate-embeddings
 %-embeddings: CMD := sbatch submit.sh
@@ -89,7 +91,7 @@ download-247-pickles:
 %-embeddings: EMB_TYPE := gpt2-xl
 # {glove50 | bert | gpt2-xl}
 %-embeddings: CNXT_LEN := 1024
-%-embeddings: HIST := --history
+# %-embeddings: HIST := --conversational
 # Note: embeddings file is the same for all podcast subjects \
 and hence only generate once using subject: 661
 
