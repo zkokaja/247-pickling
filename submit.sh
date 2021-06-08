@@ -10,20 +10,9 @@ export TRANSFORMERS_OFFLINE=1
 
 if [[ "$HOSTNAME" == *"tiger"* ]]
 then
-
-if [[ "$HOSTNAME" == *"tiger"* ]]
-then
     echo "It's tiger"
     module load anaconda
     source activate 247-main
-else
-    module load anacondapy
-    source activate srm
-fi
-
-echo 'Requester:' $USER
-echo 'Node:' $HOSTNAME
-echo 'Start time:' `date`
 else
     module load anacondapy
     source activate srm

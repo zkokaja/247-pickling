@@ -36,7 +36,7 @@ endif
 # {echo | python}
 %-pickle: PRJCT_ID := podcast
 # {tfs | podcast}
-%-pickle: SID_LIST=661 662 717 723 741 742 743 763 798
+%-pickle: SID_LIST = 777
 # {625 676 | 661 662 717 723 741 742 743 763 798 | 777}
 %-pickle: MEL := 500
 # Setting a large number will extract all common electrodes across all conversations
@@ -79,19 +79,21 @@ download-pod-pickles:
 
 ## settings for targets: generate-embeddings, concatenate-embeddings
 %-embeddings: CMD := sbatch submit.sh
+%-embeddings: CMD := TRANSFORMERS_OFFLINE=1 python
 # {echo | python | sbatch submit.sh}
 %-embeddings: PRJCT_ID := podcast
 # {tfs | podcast}
-%-embeddings: SID := 661
+%-embeddings: SID := 777
 # {625 | 676 | 661} 
 %-embeddings: CONV_IDS = $(shell seq 1 1)
 # {54 for 625 | 79 for 676 | 1 for 661}
 %-embeddings: PKL_IDENTIFIER := full
 # {full | trimmed | binned}
 %-embeddings: EMB_TYPE := gpt2-xl
-# {glove50 | bert | gpt2-xl}
+%-embeddings: EMB_TYPE := blenderbot-small
+# {glove50 | bert | gpt2-xl | blenderbot[-small]}
+%-embeddings: HIST := --conversational
 %-embeddings: CNXT_LEN := 1024
-# %-embeddings: HIST := --conversational
 # Note: embeddings file is the same for all podcast subjects \
 and hence only generate once using subject: 661
 
@@ -121,8 +123,8 @@ concatenate-embeddings:
 
 # Podcast: copy embeddings to other subjects as well
 copy-embeddings:
-	for SID_LIST=662 717 723 741 742 763 798 | 777}; do \
-		rsync /scratch/gpfs/$(shell whoami)/247-pickling/results/podcast/661/
+	for sid in 777; do \
+	    rsync -a /scratch/gpfs/$(USER)/247-pickling/results/podcast/661/ /scratch/gpfs/$(USER)/247-pickling/results/podcast/$$sid; \
 	done
 
 # Sync results with the /projects/HASSON folder

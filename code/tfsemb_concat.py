@@ -76,11 +76,14 @@ def main():
                                    args.pkl_identifier)
 
     conversation_pickles = sorted(os.listdir(args.output_dir))
-    assert len(conversation_pickles) == num_convs, 'Bad conversation size'
+    assert len(conversation_pickles) >= num_convs, 'Bad conversation size'
 
     all_df = []
     for conversation in conversation_pickles:
+        if 'prefinal' in conversation:
+            continue
         conv_pkl = os.path.join(args.output_dir, conversation)
+        print(f'Loading pickle {conv_pkl}')
         all_df.append(load_pickle(conv_pkl))
 
     emb_out_dir = os.path.join(os.getcwd(), 'results', args.project_id,
@@ -90,7 +93,10 @@ def main():
 
     all_df = pd.concat(all_df, ignore_index=True)
     all_df = all_df.to_dict('records')
-    save_pickle(all_df, os.path.join(emb_out_dir, emb_out_file))
+
+    fn = os.path.join(emb_out_dir, emb_out_file)
+    print(f'Saving concatenated file to {fn}')
+    save_pickle(all_df, fn)
 
 
 if __name__ == '__main__':

@@ -16,7 +16,7 @@ from transformers import (BartForConditionalGeneration, BartTokenizer,
                           BlenderbotSmallTokenizer, BlenderbotTokenizer,
                           BlenderbotSmallForConditionalGeneration,
                           BlenderbotForConditionalGeneration)
-from .utils import create_folds, lcs, main_timer
+from utils import create_folds, lcs, main_timer
 
 
 def save_pickle(item, file_name):
@@ -102,12 +102,18 @@ def tokenize_and_explode(args, df):
     """
     df['token'] = df.word.apply(args.tokenizer.tokenize)
     df = df.explode('token', ignore_index=True)
+
+    # NOTE - this function doesn't work for blenderbot, act -> "a c t"
     df['token2word'] = df['token'].apply(
         args.tokenizer.convert_tokens_to_string).str.strip().str.lower()
     # df = remove_punctuation(df)
     df = convert_token_to_idx(df, args.tokenizer)
     df = check_token_is_root(args, df)
     df = add_glove_embeddings(df, dim=50)
+
+    # TODO - check if these columns already exist?
+    from tfspkl_main import add_vocab_columns
+    df = add_vocab_columns(df)
 
     return df
 
@@ -351,9 +357,6 @@ def printe(example, args):
     print()
 
 
-# Recently changed that increased accuracy to expected value:
-#  - using small blenderbot
-#  - include punctuation
 def generate_conversational_embeddings(args, df):
     df = tokenize_and_explode(args, df)
 
@@ -400,7 +403,7 @@ def generate_conversational_embeddings(args, df):
         final_top1_prob.extend(top1_prob)
         final_true_y_prob.extend(true_y_prob)
 
-    print(len(final_top1_word), embeddings.shape, df.shape)
+    # print(len(final_top1_word), embeddings.shape, df.shape)
     df['embeddings'] = np.concatenate(final_embeddings, axis=0).tolist()
     df['top1_pred'] = final_top1_word
     df['top1_pred_prob'] = final_top1_prob
@@ -409,8 +412,6 @@ def generate_conversational_embeddings(args, df):
     # df['entropy'] = entropy  # wth
 
     print('ZZ2 Accuracy', (df.token == df.top1_pred).mean())
-
-    save_pickle(df.to_dict('records'), args.output_file)
 
     return df
 
@@ -568,8 +569,8 @@ def select_tokenizer_and_model(args):
     elif args.embedding_type == 'blenderbot':
         tokenizer_class = BlenderbotTokenizer
         model_class = BlenderbotForConditionalGeneration
-        model_name = 'facebook/blenderbot-400M-distill'  # NOTE
         model_name = 'facebook/blenderbot-3B'  # NOTE
+        model_name = 'facebook/blenderbot-400M-distill'  # NOTE
     elif args.embedding_type == 'glove50':
         return
     else:
@@ -615,13 +616,17 @@ def parse_arguments():
     parser.add_argument('--pkl-identifier', type=str, default=None)
     parser.add_argument('--project-id', type=str, default=None)
 
+    args = parser.parse_args()
+    if 'blenderbot' in args.embedding_type:
+        args.conversational = True
+
     # custom_args = [
     #     '--project-id', 'podcast', '--pkl-identifier', 'full',
     #     '--conversation-id', '1', '--subject', '661', '--history',
     #     '--context-length', '1024', '--embedding-type', 'gpt2-xl'
     # ]
 
-    return parser.parse_args()
+    return args
 
 
 def tokenize_transcript(file_name):
@@ -629,8 +634,9 @@ def tokenize_transcript(file_name):
     with open(file_name, 'r') as fp:
         data = fp.readlines()
 
-    data = [item.strip().split(' ') for item in data]
-    data = [item for sublist in data for item in sublist]
+    data = [(i, item, item.strip().split(' ')) for i, item in enumerate(data)]
+    data = [(item, sent, i) for i, sent, sublist in data for item in sublist]
+
     return data
 
 
@@ -650,7 +656,7 @@ def tokenize_podcast_transcript(args):
 
     data = tokenize_transcript(story_file)
 
-    df = pd.DataFrame(data, columns=['word'])
+    df = pd.DataFrame(data, columns=['word', 'sentence', 'sentence_idx'])
     df['conversation_id'] = 1
 
     return df
@@ -673,7 +679,8 @@ def align_podcast_tokens(args, df):
     cloze_df = pd.read_csv(cloze_file, sep=',')
     words = list(map(str.lower, cloze_df.word.tolist()))
 
-    model_tokens = df['token2word'].tolist()
+    # model_tokens = df['token2word'].tolist()
+    model_tokens = df['token'].tolist()
 
     # Align the two lists
     mask1, mask2 = lcs(words, model_tokens)
@@ -692,7 +699,7 @@ def main():
     args = parse_arguments()
     select_tokenizer_and_model(args)
     setup_environ(args)
-    print(args.output_file, args.pickle_name)
+    print(f'Reading the pickle {args.pickle_name}')
 
     if args.project_id == 'tfs':
         utterance_df = load_pickle(args)
@@ -705,10 +712,8 @@ def main():
     if args.history:
         if args.embedding_type == 'gpt2-xl':
             df = generate_embeddings_with_context(args, utterance_df)
-        else:
-            print('TODO: Generate embeddings for this model with context')
     elif args.conversational:
-        generate_conversational_embeddings(args, utterance_df)
+        df = generate_conversational_embeddings(args, utterance_df)
     else:
         if args.embedding_type == 'glove50':
             df = generate_glove_embeddings(args, utterance_df)
@@ -718,8 +723,10 @@ def main():
     if args.project_id == 'podcast':
         save_pickle(df.to_dict('records'), args.output_file_prefinal)
         df = align_podcast_tokens(args, df)
-        df = create_folds(df, 10)
+        # Folds should be created later
+        # df = create_folds(df, 10)
 
+    print(f'Saving to {args.output_file}')
     save_pickle(df.to_dict('records'), args.output_file)
 
     return
