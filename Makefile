@@ -36,10 +36,11 @@ endif
 # {echo | python}
 %-pickle: PRJCT_ID := podcast
 # {tfs | podcast}
-%-pickle: SID_LIST = 777
+%-pickle: SID_LIST=661 662 717 723 741 742 743 763 798
+%-pickle: SID_LIST=661
 # {625 676 | 661 662 717 723 741 742 743 763 798 | 777}
 %-pickle: MEL := 500
-# Setting a large number will extract all common electrodes across all conversations
+# Setting a large number will extract all common electrodes across all convos
 %-pickle: MINF := 0
 
 create-pickle:
@@ -52,12 +53,12 @@ create-pickle:
 					--vocab-min-freq $(MINF); \
 		done
 
-# create pickle fof significant electrodes
+# create pickle of significant electrodes
 create-sig-pickle:
 	mkdir -p logs
 	$(CMD) code/tfspkl_main.py \
 			--project-id $(PRJCT_ID) \
-			--sig-elec-file /scratch/gpfs/hgazula/phase-5000-sig-elec-glove50d-perElec-FDR-01_newVer_1000perm-LH.csv \
+			--sig-elec-file data/podcast/all-electrodes.csv \
 			--max-electrodes $(MEL) \
 			--vocab-min-freq $(MINF);
 
@@ -79,7 +80,7 @@ download-pod-pickles:
 
 ## settings for targets: generate-embeddings, concatenate-embeddings
 %-embeddings: CMD := sbatch submit.sh
-%-embeddings: CMD := TRANSFORMERS_OFFLINE=1 python
+%-embeddings: CMD := python
 # {echo | python | sbatch submit.sh}
 %-embeddings: PRJCT_ID := podcast
 # {tfs | podcast}

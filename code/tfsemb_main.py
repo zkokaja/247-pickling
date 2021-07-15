@@ -108,12 +108,11 @@ def tokenize_and_explode(args, df):
         args.tokenizer.convert_tokens_to_string).str.strip().str.lower()
     # df = remove_punctuation(df)
     df = convert_token_to_idx(df, args.tokenizer)
-    df = check_token_is_root(args, df)
+    # df = check_token_is_root(args, df)
     df = add_glove_embeddings(df, dim=50)
 
-    # TODO - check if these columns already exist?
-    from tfspkl_main import add_vocab_columns
-    df = add_vocab_columns(df)
+    # from tfspkl_main import add_vocab_columns
+    # df = add_vocab_columns(df)
 
     return df
 
@@ -430,7 +429,7 @@ def generate_embeddings_with_context(args, df):
         token_list = get_conversation_tokens(df, conversation)
         model_input = make_input_from_tokens(args, token_list)
         print(len(model_input))
-        print(model_input)
+        # print(model_input)
         input_dl = make_dataloader_from_input(model_input)
         embeddings, logits = model_forward_pass(args, input_dl)
         print(len(embeddings), len(logits))
@@ -705,9 +704,33 @@ def main():
         utterance_df = load_pickle(args)
         utterance_df = select_conversation(args, utterance_df)  # was commented
     elif args.project_id == 'podcast':
+        labels_df = load_pickle(args)
         utterance_df = tokenize_podcast_transcript(args)
     else:
         raise Exception('Invalid Project ID')
+
+    # NOTE - temporary
+    if True:  # use already generated embeddings (e.g. to update labels)
+        print('Using pregenerated embeddings')
+
+        # Load pickle with embeddings
+        with open(args.output_file + '.pkl', 'rb') as f:
+            ds = pickle.load(f)
+        df = pd.DataFrame(ds)
+
+        # Align new labels with old embeddings
+        labels_df['word'] = labels_df.word.replace("its'", "its")  # NOTE
+        mask1, mask2 = lcs(labels_df.word.str.lower().tolist(),
+                           df.token2word.tolist())
+        print(len(mask2), df.shape)
+
+        # NOTE - this only adds new columns, doesn't replace old ones
+        labels_df2 = labels_df.iloc[mask1].copy()
+        for col in set(df.columns).difference(set(labels_df.columns)):
+            labels_df2[col] = df[col].values
+
+        save_pickle(labels_df2.to_dict('records'), args.output_file)
+        exit()
 
     if args.history:
         if args.embedding_type == 'gpt2-xl':

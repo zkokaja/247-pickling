@@ -1,11 +1,12 @@
 #!/bin/bash
-#SBATCH --time=01:30:00
-#SBATCH --mem=20GB
+#SBATCH --time=02:00:00
+#SBATCH --mem=92GB
 #SBATCH --gres=gpu:1
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=4
-#SBATCH -o './logs/%A.out'
+#SBATCH -o './logs/%A.log'
 
+set -e
 export TRANSFORMERS_OFFLINE=1
 
 if [[ "$HOSTNAME" == *"tiger"* ]]

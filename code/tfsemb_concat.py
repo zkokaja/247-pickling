@@ -76,7 +76,7 @@ def main():
                                    args.pkl_identifier)
 
     conversation_pickles = sorted(os.listdir(args.output_dir))
-    assert len(conversation_pickles) >= num_convs, 'Bad conversation size'
+    # assert len(conversation_pickles) == num_convs, 'Bad conversation size'
 
     all_df = []
     for conversation in conversation_pickles:

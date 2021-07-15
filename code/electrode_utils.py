@@ -37,7 +37,7 @@ def get_electrode_mp(elec_id, CONFIG):
     return get_electrode(CONFIG, elec_id)
 
 
-def return_electrode_array(CONFIG, conv, elect):
+def return_electrode_array(CONFIG, conv, elect, standarize=False):
     """Return neural data from all electrodes as a numpy object
 
     Arguments:
@@ -54,7 +54,9 @@ def return_electrode_array(CONFIG, conv, elect):
                 lambda x: x is not None,
                 pool.map(partial(get_electrode_mp, CONFIG=CONFIG), elec_ids)))
 
-    ecogs = standardize_matrix(ecogs)
+    ecogs = np.asarray(ecogs).T
+    if standarize:
+        ecogs = standardize_matrix(ecogs)
     assert (ecogs.ndim == 2 and ecogs.shape[1] == len(elect))
 
     return ecogs

@@ -31,16 +31,15 @@ def build_design_matrices(CONFIG, delimiter=','):
     """
     if CONFIG['sig_elec_file']:
         try:
-            bobbi = pd.read_csv(CONFIG['sig_elec_file'],
-                                header=None)[0].tolist()
-            sigelec_list = [function1(item) for item in bobbi]
+            df = pd.read_csv(CONFIG['sig_elec_file'], header=None)[0].tolist()
+            sigelec_list = [function1(item) for item in df]
             df = pd.DataFrame(sigelec_list, columns=['subject', 'electrode'])
         except:
             df = pd.read_csv(CONFIG['sig_elec_file'],
                              columns=['subject', 'electrode'])
-        else:
-            electrodes_dict = df.groupby('subject')['electrode'].apply(
-                list).to_dict()
+
+        electrodes_dict = df.groupby('subject')['electrode'].apply(list).to_dict()
+        print(f'Pickling {len(electrodes_dict)} electrodes')
 
         full_signal = []
         trimmed_signal = []
@@ -99,7 +98,9 @@ def process_data_for_pickles(CONFIG, subject=None, electrode_labels=None):
         electrode_names = [electrode_names[i] for i in idx]
         electrodes = [electrodes[i] for i in idx]
 
-        assert set(electrode_names) == set(electrode_labels)
+        missing = set(electrode_labels) - set(electrode_names)
+        print('The following electrodes were specified but not found', missing)
+        # assert set(electrode_names) == set(electrode_labels)
 
     if subject:
         subject_id = [subject for i in electrodes]

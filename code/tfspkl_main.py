@@ -29,7 +29,7 @@ def save_pickle(args, item, file_name):
     file_name = os.path.join(args.PKL_DIR, file_name) + add_ext
 
     with open(file_name, 'wb') as fh:
-        pickle.dump(item, fh)
+        pickle.dump(item, fh, protocol=4)
     return
 
 
